@@ -1,2 +1,4 @@
 results/
 *.jsonl
+hf_token.txt
+page_size*.txt

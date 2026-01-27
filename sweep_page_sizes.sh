@@ -5,12 +5,22 @@
 
 set -e
 
-MODEL_PATH="${1:-meta-llama/Llama-3.1-8B-Instruct}"
-PAGE_SIZES="${PAGE_SIZES:-1 16 32 64 128}"
+MODEL_PATH="${1:-Qwen/Qwen2.5-7B-Instruct}"
+PAGE_SIZES="${PAGE_SIZES:-1 16 32 64 128 256}"
 HOST="${SGLANG_HOST:-127.0.0.1}"
 PORT="${SGLANG_PORT:-30000}"
 RESULTS_DIR="${RESULTS_DIR:-./results}"
 WAIT_READY_SEC="${WAIT_READY_SEC:-120}"
+
+# HuggingFace 镜像源配置
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+
+# 优化参数：突出 page_size 影响
+MAX_CONCURRENCY="${MAX_CONCURRENCY:-16}"
+REQUEST_RATE="${REQUEST_RATE:-3}"
+NUM_PROMPTS="${NUM_PROMPTS:-1000}"
+OUTPUT_LEN="${RANDOM_OUTPUT_LEN:-128}"
+DATASET="${DATASET:-random}"
 
 mkdir -p "${RESULTS_DIR}"
 
@@ -36,34 +46,50 @@ for PS in ${PAGE_SIZES}; do
   echo "Page size: ${PS}"
   echo "=============================================="
 
+  # 计算输入长度：page_size * 32，但限制在合理范围
+  INPUT_LEN=$((PS * 32))
+  if [ $INPUT_LEN -lt 256 ]; then
+    INPUT_LEN=256  # 最小 256 tokens
+  elif [ $INPUT_LEN -gt 2048 ]; then
+    INPUT_LEN=2048  # 最大 2048 tokens
+  fi
+  
+  echo "输入长度: ${INPUT_LEN} tokens (${PS} * 32，限制在 256-2048)"
+  echo "使用优化参数: 并发=${MAX_CONCURRENCY}, 速率=${REQUEST_RATE} req/s"
+  echo ""
+
   # 启动服务（后台）
+  # 注意：CUDA_VISIBLE_DEVICES 需要通过环境变量设置，不是命令行参数
+  export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
   python3 -m sglang.launch_server \
     --model-path "${MODEL_PATH}" \
     --attention-backend flashinfer \
     --page-size "${PS}" \
-    --port "${PORT}" &
+    --port "${PORT}" \
+    > "${RESULTS_DIR}/server_page${PS}.log" 2>&1 &
   SVR_PID=$!
 
   if ! wait_for_server; then
     kill -9 $SVR_PID 2>/dev/null || true
-    echo "Skipping page_size=${PS}"
+    echo "跳过 page_size=${PS}（服务器启动失败）"
+    echo ""
     continue
   fi
 
-  # 跑 bench，结果文件名带 page_size
+  # 跑 bench，结果文件名带 page_size（使用优化参数）
   OUT_FILE="${RESULTS_DIR}/bench_page${PS}_$(date +%Y%m%d_%H%M%S).jsonl"
   python3 -m sglang.bench_serving \
     --backend sglang \
     --host "${HOST}" \
     --port "${PORT}" \
     --model "${MODEL_PATH}" \
-    --dataset-name random \
-    --num-prompts 500 \
-    --request-rate 50 \
-    --max-concurrency 128 \
-    --random-input-len 512 \
-    --random-output-len 256 \
-    --random-range-ratio 0.5 \
+    --dataset-name "${DATASET}" \
+    --num-prompts "${NUM_PROMPTS}" \
+    --request-rate "${REQUEST_RATE}" \
+    --max-concurrency "${MAX_CONCURRENCY}" \
+    --random-input-len "${INPUT_LEN}" \
+    --random-output-len "${OUTPUT_LEN}" \
+    --random-range-ratio 0.2 \
     --output-file "${OUT_FILE}" \
     --output-details \
     --flush-cache || true
