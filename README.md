@@ -20,7 +20,7 @@
 |------|------|
 | `start_server.sh` | 用 FlashInfer + 指定 page_size 启动 SGLang 服务 |
 | `run_benchmark.sh` | 对已运行的服务执行 `sglang.bench_serving` |
-| `sweep_page_sizes.sh` | 自动对多个 page_size 依次：启服 → 跑 bench → 停服，结果写到 `results/` |
+| `sweep_page_sizes.sh` | 自动对多个 page_size 依次：启服 → 跑 bench → 停服，默认固定 workload 做公平对比 |
 | `aggregate_results.py` | 从 `results/*.jsonl` 汇总成表格，便于对比不同 page_size |
 | `README.md` | 本说明 |
 
@@ -64,7 +64,7 @@ chmod +x sweep_page_sizes.sh
 ./sweep_page_sizes.sh
 ```
 
-默认测试的 page_size：`1 16 32 64 128`。可自定义：
+默认测试的 page_size：`1 16 32 64 128 256`。可自定义：
 
 ```bash
 PAGE_SIZES="1 8 16 32 64" ./sweep_page_sizes.sh
@@ -76,6 +76,21 @@ PAGE_SIZES="1 8 16 32 64" ./sweep_page_sizes.sh
 ./sweep_page_sizes.sh meta-llama/Llama-3.1-8B-Instruct
 WAIT_READY_SEC=180 RESULTS_DIR=./my_results ./sweep_page_sizes.sh
 ```
+
+`sweep_page_sizes.sh` 默认会固定 `RANDOM_INPUT_LEN=1024`、`RANDOM_OUTPUT_LEN=128`、`RANDOM_RANGE_RATIO=0`，并通过 `BENCHMARK_SEED=20260331` 让每个 `page_size` 复用同一批 prompts，以便在同一 workload 下公平比较不同服务端 `page_size`。你也可以覆盖这些值：
+
+```bash
+RANDOM_INPUT_LEN=2048 RANDOM_OUTPUT_LEN=128 ./sweep_page_sizes.sh
+```
+
+如需显式指定种子或固定底层数据源：
+
+```bash
+BENCHMARK_SEED=12345 ./sweep_page_sizes.sh
+DATASET_PATH=/path/to/local/sharegpt.json BENCHMARK_SEED=12345 ./sweep_page_sizes.sh
+```
+
+默认 `DATASET=random` 会在固定 seed 下重复同一批随机 prompts；如果你希望跨机器、跨时间也完全复现，建议同时固定 `DATASET_PATH` 到本地静态数据文件。
 
 生成的文件形如：`results/bench_page16_20250126_120000.jsonl`。
 

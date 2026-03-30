@@ -15,14 +15,24 @@ WAIT_READY_SEC="${WAIT_READY_SEC:-120}"
 # HuggingFace 镜像源配置
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 
-# 优化参数：突出 page_size 影响
+# 基准参数：默认固定 workload，便于公平对比不同服务端 page_size
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-16}"
 REQUEST_RATE="${REQUEST_RATE:-3}"
 NUM_PROMPTS="${NUM_PROMPTS:-1000}"
+INPUT_LEN="${RANDOM_INPUT_LEN:-1024}"
 OUTPUT_LEN="${RANDOM_OUTPUT_LEN:-128}"
+RANDOM_RANGE_RATIO="${RANDOM_RANGE_RATIO:-0}"
 DATASET="${DATASET:-random}"
+DATASET_PATH="${DATASET_PATH:-}"
+BENCHMARK_SEED="${BENCHMARK_SEED:-20260331}"
 
 mkdir -p "${RESULTS_DIR}"
+
+if [ "${DATASET}" = "random" ]; then
+  echo "提示: 当前会用固定种子 BENCHMARK_SEED=${BENCHMARK_SEED} 复用同一批随机 prompts。"
+  echo "如需跨机器/跨时间进一步固定数据源，可额外设置 DATASET_PATH=/path/to/local/sharegpt.json。"
+  echo ""
+fi
 
 # 等待服务就绪
 wait_for_server() {
@@ -46,15 +56,13 @@ for PS in ${PAGE_SIZES}; do
   echo "Page size: ${PS}"
   echo "=============================================="
 
-  # 计算输入长度：page_size * 32，但限制在合理范围
-  INPUT_LEN=$((PS * 32))
-  if [ $INPUT_LEN -lt 256 ]; then
-    INPUT_LEN=256  # 最小 256 tokens
-  elif [ $INPUT_LEN -gt 2048 ]; then
-    INPUT_LEN=2048  # 最大 2048 tokens
+  echo "输入长度: ${INPUT_LEN} tokens (固定)"
+  echo "输出长度: ${OUTPUT_LEN} tokens (固定)"
+  echo "数据集: ${DATASET}, random_range_ratio=${RANDOM_RANGE_RATIO}"
+  if [ -n "${DATASET_PATH}" ]; then
+    echo "数据源文件: ${DATASET_PATH}"
   fi
-  
-  echo "输入长度: ${INPUT_LEN} tokens (${PS} * 32，限制在 256-2048)"
+  echo "Benchmark seed: ${BENCHMARK_SEED}"
   echo "使用优化参数: 并发=${MAX_CONCURRENCY}, 速率=${REQUEST_RATE} req/s"
   echo ""
 
@@ -76,23 +84,28 @@ for PS in ${PAGE_SIZES}; do
     continue
   fi
 
-  # 跑 bench，结果文件名带 page_size（使用优化参数）
+  # 跑 bench，结果文件名带 page_size（保持同一 workload）
   OUT_FILE="${RESULTS_DIR}/bench_page${PS}_$(date +%Y%m%d_%H%M%S).jsonl"
-  python3 -m sglang.bench_serving \
-    --backend sglang \
-    --host "${HOST}" \
-    --port "${PORT}" \
-    --model "${MODEL_PATH}" \
-    --dataset-name "${DATASET}" \
-    --num-prompts "${NUM_PROMPTS}" \
-    --request-rate "${REQUEST_RATE}" \
-    --max-concurrency "${MAX_CONCURRENCY}" \
-    --random-input-len "${INPUT_LEN}" \
-    --random-output-len "${OUTPUT_LEN}" \
-    --random-range-ratio 0.2 \
-    --output-file "${OUT_FILE}" \
-    --output-details \
-    --flush-cache || true
+  BENCH_ARGS=(
+    --backend sglang
+    --host "${HOST}"
+    --port "${PORT}"
+    --model "${MODEL_PATH}"
+    --dataset-name "${DATASET}"
+    --num-prompts "${NUM_PROMPTS}"
+    --request-rate "${REQUEST_RATE}"
+    --max-concurrency "${MAX_CONCURRENCY}"
+    --random-input-len "${INPUT_LEN}"
+    --random-output-len "${OUTPUT_LEN}"
+    --random-range-ratio "${RANDOM_RANGE_RATIO}"
+    --output-file "${OUT_FILE}"
+    --output-details
+    --flush-cache
+  )
+  if [ -n "${DATASET_PATH}" ]; then
+    BENCH_ARGS+=(--dataset-path "${DATASET_PATH}")
+  fi
+  BENCHMARK_SEED="${BENCHMARK_SEED}" python3 run_seeded_bench.py "${BENCH_ARGS[@]}" || true
 
   # 停服务
   kill -15 $SVR_PID 2>/dev/null || true
