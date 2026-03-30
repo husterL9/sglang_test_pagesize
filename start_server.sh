@@ -55,6 +55,7 @@ echo ""
 python3 -m sglang.launch_server \
   --model-path "${MODEL_PATH}" \
   --attention-backend flashinfer \
+  --download-dir "/root/autodl-tmp/hf_cache/hub" \
   --page-size "${PAGE_SIZE}" \
   --port "${PORT}" \
   "${@:3}"
